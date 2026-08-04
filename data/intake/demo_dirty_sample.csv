@@ -1,0 +1,6 @@
+company_id,name,description,company_size,state,country,city,zip_code,address,url
+900000001,Acme   Corp,"A widget maker.",3,NY,US,New York,10001,123 Main St,https://www.linkedin.com/company/acme
+900000001,Acme   Corp,"A widget maker.",3,NY,US,New York,10001,123 Main St,https://www.linkedin.com/company/acme
+900000002,Globex,"Sprockets and gears.",99,CA,0,Los Angeles,90001,456 Oak Ave,https://www.linkedin.com/company/globex
+,Initech,"Missing company_id.",2,0,US,Austin,73301,789 Pine Rd,https://www.linkedin.com/company/initech
+900000003,Umbrella Inc,"Bad url field.",4,TX,US,Houston,77001,321 Elm St,not-a-valid-url
