@@ -21,6 +21,7 @@ from lucidflow.ingestion.loader import load_file
 from lucidflow.loading.db import get_engine
 from lucidflow.loading.postgres_writer import write_clean_records
 from lucidflow.loading.quarantine_writer import write_quarantine_records
+from lucidflow.models.imputation_selector.selector import print_report, run_missingness_engine
 from lucidflow.validation.pydantic_models import Company
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -78,6 +79,13 @@ def main() -> None:
         valid_df, removed_count = remove_exact_duplicates(valid_df)
         valid_df = coerce_types(valid_df, {"company_id": pl.Int64, "company_size": pl.Int64})
         valid_df = normalize_text_columns(valid_df, TEXT_COLUMNS)
+
+        # 3b. Missingness engine — learned imputation for company_size/state/city/zip_code,
+        # left as-is for address/description (see imputation_selector/selector.py docstring).
+        valid_df, missingness_report = run_missingness_engine(valid_df)
+        if missingness_report:
+            print_report(missingness_report)
+
         clean_records = valid_df.to_dicts()
     else:
         clean_records = []
