@@ -20,6 +20,15 @@ htmlcov/
 # ML tracking (Phase 2+)
 mlruns/
 
+# Imputation-selector artifacts are regenerated fresh on every pipeline run
+# from companies.csv (itself not committed) — not durable trained models
+# like the column-type classifier, so not worth version-controlling.
+src/lucidflow/models/imputation_selector/*.joblib
+
+# Contains verbatim rows (names, descriptions, addresses) from companies.csv,
+# which itself isn't committed — regenerate via build_dataset.py.
+src/lucidflow/models/quarantine_classifier/labeled_dataset.json
+
 # Data (large datasets — not committed; provide your own under data/intake/)
 data/**
 !data/**/
