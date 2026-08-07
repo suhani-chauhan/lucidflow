@@ -29,7 +29,7 @@ def _synthetic_companies_df() -> pl.DataFrame:
 def test_benchmarked_columns_get_fully_imputed(tmp_path):
     df = _synthetic_companies_df()
 
-    imputed, _ = run_missingness_engine(df, artifact_dir=tmp_path)
+    imputed, _ = run_missingness_engine(df, artifact_dir=tmp_path, track_mlflow=False)
 
     assert imputed["company_size"].null_count() == 0
     assert imputed["country"].null_count() == 0
@@ -38,7 +38,7 @@ def test_benchmarked_columns_get_fully_imputed(tmp_path):
 def test_group_mode_columns_get_fully_imputed(tmp_path):
     df = _synthetic_companies_df()
 
-    imputed, _ = run_missingness_engine(df, artifact_dir=tmp_path)
+    imputed, _ = run_missingness_engine(df, artifact_dir=tmp_path, track_mlflow=False)
 
     assert imputed["state"].null_count() == 0
     assert imputed["city"].null_count() == 0
@@ -48,7 +48,7 @@ def test_group_mode_columns_get_fully_imputed(tmp_path):
 def test_skipped_columns_are_left_null(tmp_path):
     df = _synthetic_companies_df()
 
-    imputed, report = run_missingness_engine(df, artifact_dir=tmp_path)
+    imputed, report = run_missingness_engine(df, artifact_dir=tmp_path, track_mlflow=False)
 
     assert imputed["description"].null_count() == 10
     assert imputed["address"].null_count() == 10
@@ -60,7 +60,7 @@ def test_skipped_columns_are_left_null(tmp_path):
 def test_unconfigured_column_with_nulls_is_flagged_not_silently_handled(tmp_path):
     df = _synthetic_companies_df()
 
-    imputed, report = run_missingness_engine(df, artifact_dir=tmp_path)
+    imputed, report = run_missingness_engine(df, artifact_dir=tmp_path, track_mlflow=False)
 
     assert imputed["extra_unhandled"].null_count() == 5  # left untouched
     entry = next(e for e in report if e["column"] == "extra_unhandled")
@@ -70,7 +70,7 @@ def test_unconfigured_column_with_nulls_is_flagged_not_silently_handled(tmp_path
 def test_benchmarked_columns_persist_a_fitted_artifact(tmp_path):
     df = _synthetic_companies_df()
 
-    run_missingness_engine(df, artifact_dir=tmp_path)
+    run_missingness_engine(df, artifact_dir=tmp_path, track_mlflow=False)
 
     assert (tmp_path / "company_size_imputer.joblib").exists()
     assert (tmp_path / "country_imputer.joblib").exists()
@@ -79,7 +79,7 @@ def test_benchmarked_columns_persist_a_fitted_artifact(tmp_path):
 def test_group_mode_columns_persist_a_lookup_artifact(tmp_path):
     df = _synthetic_companies_df()
 
-    run_missingness_engine(df, artifact_dir=tmp_path)
+    run_missingness_engine(df, artifact_dir=tmp_path, track_mlflow=False)
 
     assert (tmp_path / "state_group_mode.joblib").exists()
     assert (tmp_path / "city_group_mode.joblib").exists()
@@ -100,7 +100,7 @@ def test_benchmarked_column_report_includes_class_coverage_and_limitation_note(t
         "zip_code": ["90001"] * 101,
     }).with_columns(pl.col("company_size").cast(pl.Int64, strict=False))
 
-    _, report = run_missingness_engine(df, artifact_dir=tmp_path)
+    _, report = run_missingness_engine(df, artifact_dir=tmp_path, track_mlflow=False)
 
     entries = {e["column"]: e for e in report}
     size_coverage = entries["company_size"]["class_coverage"]
@@ -118,7 +118,7 @@ def test_benchmarked_column_report_includes_class_coverage_and_limitation_note(t
 def test_report_includes_diagnosis_and_decision_for_every_null_column(tmp_path):
     df = _synthetic_companies_df()
 
-    _, report = run_missingness_engine(df, artifact_dir=tmp_path)
+    _, report = run_missingness_engine(df, artifact_dir=tmp_path, track_mlflow=False)
 
     reported_columns = {e["column"] for e in report}
     assert reported_columns == {

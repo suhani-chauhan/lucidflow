@@ -17,8 +17,9 @@ dist/
 .coverage
 htmlcov/
 
-# ML tracking (Phase 2+)
+# ML tracking (Phase 2+; SQLite backend + local artifact store, see mlflow_config.py)
 mlruns/
+mlflow.db
 
 # Imputation-selector artifacts are regenerated fresh on every pipeline run
 # from companies.csv (itself not committed) — not durable trained models
