@@ -1,5 +1,7 @@
 # LucidFlow
 
+[![CI](https://github.com/suhani-chauhan/lucidflow/actions/workflows/ci.yml/badge.svg)](https://github.com/suhani-chauhan/lucidflow/actions/workflows/ci.yml)
+
 A data quality platform that replaces hand-written cleaning rules with trained ML models, wrapped
 in a production ETL pipeline: a semantic column-type classifier, a learned imputation selector,
 and a quarantine classifier for corrupt-record detection — orchestrated with Prefect, tracked
