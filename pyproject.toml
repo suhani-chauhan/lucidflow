@@ -1,7 +1,7 @@
 [project]
 name = "lucidflow"
 version = "0.1.0"
-description = "ML-driven data quality platform — Phases 1-3 done (ETL spine, column-type/imputation/quarantine models)"
+description = "ML-driven data quality platform — Phases 1-4 done (ETL spine, three trained models, MLOps layer); Phase 5 dashboard in progress"
 requires-python = ">=3.11"
 dependencies = [
     "polars>=1.0",
@@ -17,6 +17,7 @@ dependencies = [
     "mlflow>=2.14",
     "prefect>=3.0",
     "boto3>=1.34",
+    "streamlit>=1.38",
 ]
 
 [project.optional-dependencies]

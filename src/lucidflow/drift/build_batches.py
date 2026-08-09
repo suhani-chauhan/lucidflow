@@ -21,9 +21,16 @@ representative of any real shift size, only tuned to demonstrate the
 detector's three severity bands on this dataset.
 
     python -m lucidflow.drift.build_batches
+
+Alongside the reference profile, the per-batch PSI/KS report is saved to
+last_check_results.json -- same "persist what's already computed" pattern,
+so the dashboard's drift status view (Phase 5) can read the three-batch
+characterization directly instead of re-running this script.
 """
 
+import json
 import random
+from pathlib import Path
 
 import polars as pl
 
@@ -36,6 +43,7 @@ from lucidflow.drift.synthetic_shift import (
 )
 
 DATA_PATH = "data/intake/companies.csv"
+LAST_CHECK_RESULTS_PATH = Path(__file__).parent / "last_check_results.json"
 
 BASELINE_SEED = 42
 BASELINE_SIZE = 12_000
@@ -78,9 +86,11 @@ def main() -> None:
 
     pool = df.sample(n=POOL_SIZE, seed=POOL_SEED)
 
+    all_reports = {}
     for label, scale in BATCH_MAGNITUDES.items():
         batch_df = build_batch(pool, scale)
         report = check_drift(reference_profile, batch_df)
+        all_reports[label] = {"magnitude_scale": scale, **report}
 
         print(f"=== Batch {label} (magnitude_scale={scale}) ===")
         for column in ("company_size", "state_null_rate", "description_len"):
@@ -93,6 +103,9 @@ def main() -> None:
                     f"p_value={entry['p_value']:.6f}  severity={entry['severity']}"
                 )
         print(f"  any_flagged: {report['any_flagged']}\n")
+
+    LAST_CHECK_RESULTS_PATH.write_text(json.dumps(all_reports, indent=2))
+    print(f"Per-batch PSI/KS report saved to {LAST_CHECK_RESULTS_PATH}")
 
 
 if __name__ == "__main__":

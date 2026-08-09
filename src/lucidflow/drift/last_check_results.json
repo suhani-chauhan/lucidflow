@@ -1,0 +1,62 @@
+{
+  "A": {
+    "magnitude_scale": 0.0,
+    "company_size": {
+      "metric": "psi",
+      "value": 0.00033920942101288323,
+      "severity": "none"
+    },
+    "state_null_rate": {
+      "metric": "psi",
+      "value": 0.00013526623981801472,
+      "severity": "none"
+    },
+    "description_len": {
+      "metric": "ks",
+      "statistic": 0.006820385148365249,
+      "p_value": 0.9923506984265859,
+      "severity": "none"
+    },
+    "any_flagged": false
+  },
+  "B": {
+    "magnitude_scale": 1.0,
+    "company_size": {
+      "metric": "psi",
+      "value": 0.44686726268953714,
+      "severity": "significant"
+    },
+    "state_null_rate": {
+      "metric": "psi",
+      "value": 0.35453496560847253,
+      "severity": "significant"
+    },
+    "description_len": {
+      "metric": "ks",
+      "statistic": 0.04407539641600272,
+      "p_value": 4.175414219339984e-07,
+      "severity": "significant"
+    },
+    "any_flagged": true
+  },
+  "C": {
+    "magnitude_scale": 0.5,
+    "company_size": {
+      "metric": "psi",
+      "value": 0.13272464267178194,
+      "severity": "moderate"
+    },
+    "state_null_rate": {
+      "metric": "psi",
+      "value": 0.14779495527387504,
+      "severity": "moderate"
+    },
+    "description_len": {
+      "metric": "ks",
+      "statistic": 0.023501837136635728,
+      "p_value": 0.025065265039747375,
+      "severity": "moderate"
+    },
+    "any_flagged": true
+  }
+}
