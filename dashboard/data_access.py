@@ -1,10 +1,11 @@
-"""Read-only data access for the observability dashboard (Phase 5, Task 2).
+"""Data access for the LucidFlow dashboard.
 
-Every function here reads outputs that already exist -- Postgres tables
-populated by run_pipeline.py, MLflow runs logged by each model's train.py
-(Phase 4, Task 1), and the drift monitor's saved reference profile / last
-per-batch report (Phase 4, Task 2). Nothing here recomputes a metric or
-retrains anything.
+Phase 5, Task 2's functions (pipeline summary, model results, drift status,
+entity resolution) are read-only: they read outputs that already exist --
+Postgres tables populated by run_pipeline.py, MLflow runs logged by each
+model's train.py (Phase 4, Task 1), and the drift monitor's saved reference
+profile / last per-batch report (Phase 4, Task 2). Nothing there recomputes
+a metric or retrains anything.
 
 "Most recent pipeline run" is derived without any schema change: each of
 write_clean_records/write_quarantine_records runs inside one Postgres
@@ -13,6 +14,12 @@ stable within a transaction -- so every row written by one call shares one
 exact loaded_at/quarantined_at timestamp. Grouping by MAX(loaded_at) (or
 MAX(quarantined_at)) therefore isolates exactly the rows from the latest
 write of each kind, with no run_id column needed.
+
+Phase 5, Task 3's functions (bottom of the file) are the one place this
+dashboard writes: submitting a human review decision to
+quarantine.quarantine_reviews, and triggering
+models/quarantine_classifier/retrain_with_reviews.py once enough decisions
+exist.
 """
 
 import json
@@ -33,6 +40,7 @@ ENTITY_RESOLUTION_DOC_PATH = Path(__file__).resolve().parents[1] / "docs" / "ent
 COLUMN_TYPE_EXPERIMENT = "lucidflow-column-type-classifier"
 IMPUTATION_EXPERIMENT = "lucidflow-imputation-selector"
 QUARANTINE_EXPERIMENT = "lucidflow-quarantine-classifier"
+QUARANTINE_REGISTERED_MODEL_NAME = "lucidflow-quarantine-classifier"
 
 
 # ---------------------------------------------------------------------------
@@ -262,3 +270,126 @@ def get_entity_resolution_doc() -> str | None:
     if not ENTITY_RESOLUTION_DOC_PATH.exists():
         return None
     return ENTITY_RESOLUTION_DOC_PATH.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Human-in-the-loop quarantine review (Phase 5, Task 3)
+# ---------------------------------------------------------------------------
+
+MIN_REVIEWS_FOR_RETRAIN = 20
+
+
+def find_ml_flag_reason(reasons: list[dict]) -> dict | None:
+    """Picks out the quarantine_classifier reason entry from a row's `reasons` list, if
+    any -- ignores deterministic contract-validation failures (rule != quarantine_classifier)
+    and older enriched-schema-less ML flags (no 'features' key, written before Phase 5, Task
+    3 started persisting score/features at classification time). Pure function, split out
+    from get_review_queue for unit testing.
+    """
+    return next((r for r in reasons if r.get("rule") == "quarantine_classifier" and "features" in r), None)
+
+
+def row_to_queue_entry(record_id: int, raw_data: dict, reasons: list[dict], quarantined_at) -> dict | None:
+    """Builds one review-queue entry from a quarantine.records row, or None if this row
+    isn't a reviewable ML flag (see find_ml_flag_reason). Pure function, split out from
+    get_review_queue for unit testing.
+    """
+    ml_reason = find_ml_flag_reason(reasons)
+    if ml_reason is None:
+        return None
+    return {
+        "record_id": record_id,
+        "raw_data": raw_data,
+        "score": ml_reason["score"],
+        "message": ml_reason["message"],
+        "model_version": ml_reason.get("model_version"),
+        "features": ml_reason["features"],
+        "quarantined_at": quarantined_at,
+    }
+
+
+def get_review_queue(limit: int = 200) -> list[dict]:
+    """Real, unreviewed quarantine.records rows flagged by the ML classifier (not
+    contract-validation failures -- those are deterministic, not model predictions, and
+    Phase 3's own reasoning is that training on them would teach nothing new). Only rows
+    with the enriched score/features fields are returned (see pipeline_flow.py's
+    quarantine_classify_task); older rows written before that field existed are skipped.
+    """
+    engine = get_engine()
+    query = text(
+        """
+        SELECT q.id, q.raw_data, q.reasons, q.quarantined_at
+        FROM quarantine.records q
+        LEFT JOIN quarantine.quarantine_reviews r ON r.record_id = q.id
+        WHERE r.id IS NULL
+        ORDER BY q.quarantined_at DESC, q.id
+        LIMIT :limit
+        """
+    )
+    with engine.connect() as conn:
+        rows = conn.execute(query, {"limit": limit}).fetchall()
+
+    queue = [row_to_queue_entry(row.id, row.raw_data, row.reasons, row.quarantined_at) for row in rows]
+    return [entry for entry in queue if entry is not None]
+
+
+def submit_review(record_id: int, decision: str) -> bool:
+    """Records a reviewer's decision. Returns False (no-op) if the record was already
+    reviewed -- ON CONFLICT DO NOTHING enforces one decision per record at the database
+    level, not just in the dashboard's own query logic.
+    """
+    engine = get_engine()
+    query = text(
+        """
+        INSERT INTO quarantine.quarantine_reviews (record_id, decision)
+        VALUES (:record_id, :decision)
+        ON CONFLICT (record_id) DO NOTHING
+        """
+    )
+    with engine.begin() as conn:
+        result = conn.execute(query, {"record_id": record_id, "decision": decision})
+        return result.rowcount > 0
+
+
+def get_review_progress() -> dict:
+    engine = get_engine()
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT decision, count(*) AS n FROM quarantine.quarantine_reviews GROUP BY decision")
+        ).fetchall()
+    counts = {row.decision: row.n for row in rows}
+    return {
+        "confirmed_bad": counts.get("confirmed_bad", 0),
+        "false_positive": counts.get("false_positive", 0),
+        "total": sum(counts.values()),
+    }
+
+
+def get_registered_quarantine_model_metrics() -> dict | None:
+    """The currently-registered quarantine classifier's synthetic-test-set metrics, for
+    display alongside a retrain candidate's -- not recomputed, read from the MLflow run
+    that produced the currently-registered version.
+    """
+    configure_mlflow(QUARANTINE_EXPERIMENT)
+    client = MlflowClient()
+    versions = client.search_model_versions(f"name='{QUARANTINE_REGISTERED_MODEL_NAME}'")
+    if not versions:
+        return None
+    latest = max(versions, key=lambda v: int(v.version))
+    run = client.get_run(latest.run_id)
+    return {
+        "version": latest.version,
+        "run_id": latest.run_id,
+        "pr_auc": run.data.metrics.get("pr_auc") or run.data.metrics.get("synthetic_pr_auc"),
+    }
+
+
+def trigger_retrain() -> dict:
+    """Runs models/quarantine_classifier/retrain_with_reviews.py synchronously. The caller
+    (the dashboard page) is responsible for gating this behind MIN_REVIEWS_FOR_RETRAIN --
+    this function doesn't re-check the threshold itself, since retrain_with_reviews.main()
+    already errors clearly if there are zero reviewed rows.
+    """
+    from lucidflow.models.quarantine_classifier.retrain_with_reviews import main as retrain_main
+
+    return retrain_main()

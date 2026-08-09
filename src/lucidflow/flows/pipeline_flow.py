@@ -154,6 +154,10 @@ def quarantine_classify_task(valid_df: pl.DataFrame) -> tuple[pl.DataFrame, list
 
     kept_df = valid_df.filter(pl.Series(~flagged_mask))
     flagged_rows = [row for row, flagged in zip(rows, flagged_mask, strict=True) if flagged]
+    # score and features are persisted here (not recomputed later) so the review dashboard
+    # (Phase 5, Task 3) shows reviewers exactly what the model actually saw and scored at
+    # classification time -- not a fresh re-score against whatever model is registered when
+    # the record happens to get reviewed.
     flagged_reasons = [
         [
             {
@@ -164,9 +168,11 @@ def quarantine_classify_task(valid_df: pl.DataFrame) -> tuple[pl.DataFrame, list
                 ),
                 "severity": "warning",
                 "model_version": model_version,
+                "score": float(score),
+                "features": row_features,
             }
         ]
-        for row, score, flagged in zip(rows, probabilities, flagged_mask, strict=True)
+        for row, score, flagged, row_features in zip(rows, probabilities, flagged_mask, features, strict=True)
         if flagged
     ]
 

@@ -97,6 +97,14 @@ def _labeled_row(row: dict, corruption_type: str, is_synthetic: bool) -> dict:
     return {
         "company_id": row["company_id"],
         "is_synthetic": is_synthetic,
+        # Explicit training label, decoupled from is_synthetic: for this module every row's
+        # label does happen to equal its is_synthetic flag (corrupted -> positive, clean ->
+        # negative), but that's not true in general -- Phase 5, Task 3's human-reviewed real
+        # rows need a positive/negative label without claiming to be synthetic. is_synthetic
+        # keeps meaning exactly "was this row corrupted by corruption.py", never repurposed
+        # as a label proxy, per this module's own "never blended silently with real data"
+        # discipline (see module docstring).
+        "label": 1 if is_synthetic else 0,
         "corruption_type": corruption_type,
         "_row": row,
     }

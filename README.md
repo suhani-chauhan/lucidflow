@@ -30,10 +30,13 @@ Phase 4 (MLOps) wraps the pipeline and all three models in production tooling:
 - **Task 4 (done)** — `docker compose up` brings up the full stack (Postgres, MinIO as MLflow's
   S3-compatible artifact store, and an app container that runs the pipeline once end-to-end).
 
-Phase 5 is in progress: CI (Task 1, done) and a read-only Streamlit observability dashboard
+Phase 5 is in progress: CI (Task 1, done), a read-only Streamlit observability dashboard
 (Task 2, done — pipeline run summary, model results, drift status, and the entity-resolution
-investigation, all reading existing MLflow/Postgres/drift outputs; see `dashboard/README.md`).
-Human-in-the-loop quarantine review (Task 3), a demo capture (Task 4), and a final consistency
+investigation, all reading existing MLflow/Postgres/drift outputs), and human-in-the-loop
+quarantine review (Task 3, done — reviewers confirm/reject real ML-flagged quarantine records,
+decisions persist to Postgres, and a real retraining cycle demonstrably runs once enough
+reviews exist, with conditional model-registry promotion). See `dashboard/README.md` for the
+full Task 3 loop and a real end-to-end result. A demo capture (Task 4) and a final consistency
 pass (Task 5) are next.
 
 A fourth model — an LLM-distilled duplicate-pair classifier for entity resolution — was scoped

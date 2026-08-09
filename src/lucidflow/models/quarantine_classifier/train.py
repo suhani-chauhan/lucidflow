@@ -47,6 +47,29 @@ def load_dataset() -> list[dict]:
     return json.loads(DATASET_PATH.read_text())
 
 
+def row_label(row: dict) -> int:
+    """The training label for one dataset row. Prefers the explicit `label` field
+    (added for Phase 5, Task 3's human-reviewed rows, which have a label independent of
+    is_synthetic); falls back to the is_synthetic-implies-positive convention for any
+    on-disk dataset generated before that field existed.
+    """
+    return row["label"] if "label" in row else (1 if row["is_synthetic"] else 0)
+
+
+def fit_isolation_forest(train_rows: list[dict]) -> IsolationForest:
+    iso_train_X = np.array([[r["features"][f] for f in ISO_FOREST_INPUT_FEATURES] for r in train_rows])
+    iso_forest = IsolationForest(n_estimators=200, contamination="auto", random_state=RANDOM_STATE)
+    iso_forest.fit(iso_train_X)
+    return iso_forest
+
+
+def build_matrix(rows: list[dict], iso_forest: IsolationForest) -> np.ndarray:
+    base = np.array([[r["features"][f] for f in FEATURE_NAMES] for r in rows])
+    iso_X = np.array([[r["features"][f] for f in ISO_FOREST_INPUT_FEATURES] for r in rows])
+    iso_scores = iso_forest.decision_function(iso_X).reshape(-1, 1)
+    return np.hstack([base, iso_scores])
+
+
 def main() -> None:
     dataset = load_dataset()
     labels_for_split = [row["corruption_type"] for row in dataset]
@@ -60,20 +83,12 @@ def main() -> None:
 
     print(f"Total rows: {len(dataset)}  |  train: {len(train_rows)}  |  test: {len(test_rows)}")
 
-    iso_train_X = np.array([[r["features"][f] for f in ISO_FOREST_INPUT_FEATURES] for r in train_rows])
-    iso_forest = IsolationForest(n_estimators=200, contamination="auto", random_state=RANDOM_STATE)
-    iso_forest.fit(iso_train_X)
+    iso_forest = fit_isolation_forest(train_rows)
 
-    def build_matrix(rows: list[dict]) -> np.ndarray:
-        base = np.array([[r["features"][f] for f in FEATURE_NAMES] for r in rows])
-        iso_X = np.array([[r["features"][f] for f in ISO_FOREST_INPUT_FEATURES] for r in rows])
-        iso_scores = iso_forest.decision_function(iso_X).reshape(-1, 1)
-        return np.hstack([base, iso_scores])
-
-    X_train = build_matrix(train_rows)
-    X_test = build_matrix(test_rows)
-    y_train = np.array([1 if r["is_synthetic"] else 0 for r in train_rows])
-    y_test = np.array([1 if r["is_synthetic"] else 0 for r in test_rows])
+    X_train = build_matrix(train_rows, iso_forest)
+    X_test = build_matrix(test_rows, iso_forest)
+    y_train = np.array([row_label(r) for r in train_rows])
+    y_test = np.array([row_label(r) for r in test_rows])
 
     n_estimators = 300
     clf = lgb.LGBMClassifier(
