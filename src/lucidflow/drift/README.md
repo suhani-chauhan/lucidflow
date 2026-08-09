@@ -23,5 +23,6 @@ catch — it does **not** validate real-world drift-detection performance or a "
 for this pipeline in production, since there's no real drift in this dataset to calibrate either
 against. See `monitor.py` and `synthetic_shift.py` docstrings for the full reasoning.
 
-Not yet done: wiring the drift monitor into the Prefect flow (Task 3) so a flagged batch actually
-triggers a retraining flow.
+Wired into the Prefect flow (Task 3, done) — see `src/lucidflow/flows/README.md`: the pipeline's
+optional `--check-drift` flag runs this exact check against a full-magnitude synthetic shift of
+the just-ingested batch, and triggers a retraining flow when it flags.

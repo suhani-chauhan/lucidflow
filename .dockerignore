@@ -1,0 +1,28 @@
+# Mirrors .gitignore's policy: never bake local datasets, virtualenvs, or
+# derived/cache artifacts into the image -- the app container gets real data
+# via the docker-compose bind mount instead (see docker-compose.yml).
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+.git/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+mlruns/
+mlflow.db
+
+data/**
+!data/**/.gitkeep
+
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

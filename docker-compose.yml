@@ -17,5 +17,73 @@ services:
       timeout: 5s
       retries: 5
 
+  # S3-compatible artifact store for MLflow (Phase 4, Task 1's model/run artifacts) --
+  # only used when running inside this stack; local (non-Docker) runs keep writing to
+  # the local mlruns/ directory (see mlflow_config.py).
+  minio:
+    image: minio/minio:latest
+    container_name: lucidflow-minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # One-shot: creates the MLflow artifact bucket, then exits. MinIO doesn't
+  # auto-create buckets, and mlflow's S3 artifact repository doesn't either.
+  minio-init:
+    image: minio/mc:latest
+    container_name: lucidflow-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin} &&
+      mc mb --ignore-existing local/lucidflow-mlflow
+      "
+
+  # Runs the Prefect pipeline flow (Phase 4, Task 3) once against the mounted data/
+  # directory, then exits -- same one-shot script invocation as running it locally,
+  # just inside the stack with postgres/minio reachable over the compose network.
+  app:
+    build: .
+    container_name: lucidflow-app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-lucidflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-lucidflow}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      MLFLOW_TRACKING_URI: sqlite:////app/.mlflow/mlflow.db
+      MLFLOW_ARTIFACT_ROOT: s3://lucidflow-mlflow/
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      # Prefect's ephemeral local API server does first-time DB setup on a cold
+      # container start; the 20s default isn't always enough there (it's fine on a
+      # host with an already-migrated ~/.prefect).
+      PREFECT_SERVER_EPHEMERAL_STARTUP_TIMEOUT_SECONDS: "120"
+    volumes:
+      - .:/app
+      - mlflow_data:/app/.mlflow
+    command: ["python", "run_pipeline.py", "data/intake/companies.csv"]
+
 volumes:
   postgres_data:
+  minio_data:
+  mlflow_data:

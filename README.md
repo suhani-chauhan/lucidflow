@@ -5,21 +5,31 @@ in a production ETL pipeline: a semantic column-type classifier, a learned imput
 and a quarantine classifier for corrupt-record detection — orchestrated with Prefect, tracked
 with MLflow, and served through a Streamlit review dashboard.
 
-**This repository has completed Phases 1-3.** Phase 1 built the ETL skeleton
-(`ingestion -> validation -> cleaning -> routing`) backed by real Postgres schemas. Phase 2 added
-the first two of LucidFlow's trained models — a semantic column-type classifier and a learned
-imputation selector — both trained on the real
+**This repository has completed Phases 1-4.** Phase 1 built the ETL
+skeleton (`ingestion -> validation -> cleaning -> routing`) backed by real Postgres schemas.
+Phase 2 added the first two of LucidFlow's trained models — a semantic column-type classifier and
+a learned imputation selector — both trained on the real
 [LinkedIn Job Postings dataset](https://www.kaggle.com/datasets/arshkon/linkedin-job-postings).
 Phase 3 added the third: a quarantine classifier trained on synthetic corruption injected into
-real, valid rows (see below for why, and what it does and doesn't catch). Of the three, only the
-imputation selector is actually wired into `run_pipeline.py`'s inference-time execution. The
-column-type classifier is trained and tested standalone as the foundation for planned automatic
-contract generation — Phase 1's hand-written `Company` contract
-(`src/lucidflow/validation/pydantic_models.py`) is still what runs at inference time. The
-quarantine classifier is likewise trained, tested, and benchmarked standalone, not yet wired into
-the pipeline's write path. Wiring both in, along with drift monitoring, Prefect orchestration, and
-MLflow tracking, is Phase 4 (MLOps). The Streamlit review dashboard is Phase 5. See the
-`README.md` stub in each unimplemented folder for what phase it belongs to.
+real, valid rows (see below for why, and what it does and doesn't catch).
+
+Phase 4 (MLOps) wraps the pipeline and all three models in production tooling:
+- **Task 1 (done)** — MLflow experiment tracking + model registry for all three models' training
+  runs (see `src/lucidflow/mlflow_config.py`).
+- **Task 2 (done)** — PSI/KS drift monitoring, grounded on a documented synthetic shift since the
+  dataset is one static snapshot with no real longitudinal batches (see `src/lucidflow/drift/`).
+- **Task 3 (done)** — the pipeline runs as a Prefect 3 flow (`src/lucidflow/flows/pipeline_flow.py`)
+  with per-stage retries, and a drift-triggered retrain subflow. Quarantine classification is now
+  real routing, not just a trained-but-unused model: rows that pass the Phase 1 Pydantic contract
+  are also scored by the trained classifier, and flagged rows are rerouted to `quarantine.records`.
+  The column-type classifier remains trained and tested standalone, as the foundation for planned
+  automatic contract generation — Phase 1's hand-written `Company` contract
+  (`src/lucidflow/validation/pydantic_models.py`) is still what actually runs at inference time.
+- **Task 4 (done)** — `docker compose up` brings up the full stack (Postgres, MinIO as MLflow's
+  S3-compatible artifact store, and an app container that runs the pipeline once end-to-end).
+
+The Streamlit review dashboard is Phase 5. See the `README.md` stub in each unimplemented folder
+for what phase it belongs to.
 
 A fourth model — an LLM-distilled duplicate-pair classifier for entity resolution — was scoped
 for Phase 3, investigated against the real dataset, and deliberately dropped: the data doesn't
@@ -29,7 +39,8 @@ for the full investigation with real examples and counts).
 ## Requirements
 
 - Python 3.11+
-- Docker + Docker Compose (for Postgres)
+- Docker + Docker Compose (Postgres, plus MinIO and the app container if you run the full stack —
+  see "Running via Docker Compose" below)
 
 ## Setup
 
@@ -46,13 +57,16 @@ cp .env.example .env
 # edit .env if you need to change ports/credentials (e.g. if 5432 is already taken locally)
 
 # 4. Start Postgres (creates the raw / clean / quarantine schemas via docker/init/001_init.sql)
-docker compose up -d
+docker compose up -d postgres
 ```
 
 ## Running the pipeline
 
-Export the variables in `.env` into your shell (so the Python process and `docker compose` agree
-on connection details), then run the entry point against a CSV in `data/intake/`:
+`run_pipeline.py` runs the pipeline as a Prefect 3 flow (`src/lucidflow/flows/pipeline_flow.py`) —
+ingestion, validation, cleaning, imputation, quarantine classification, dual-route write, each a
+task with retries and structured logging. Export the variables in `.env` into your shell (so the
+Python process and `docker compose` agree on connection details), then run it against a CSV in
+`data/intake/`:
 
 ```bash
 set -a; source .env; set +a
@@ -67,6 +81,15 @@ quarantine path:
 python run_pipeline.py data/intake/demo_dirty_sample.csv
 ```
 
+Pass `--check-drift` to also run the post-pipeline drift check against a synthetic shifted copy of
+the just-ingested batch (see "Phase 4, Task 2" below for why it's synthetic) and trigger a retrain
+if it flags. Off by default since the synthetic shift is deliberately always-significant, so it
+always triggers Prefect's `retrain_flow` (~8-10 minutes) — opt in deliberately, not on every run:
+
+```bash
+python run_pipeline.py data/intake/companies.csv --check-drift
+```
+
 Each run prints a report:
 
 ```
@@ -79,13 +102,41 @@ Written to clean.analytics_data:      1
 Written to quarantine.records:        3
 ```
 
-Rows that pass the `Company` data contract (`src/lucidflow/validation/pydantic_models.py`) land
-in `clean.analytics_data`. Rows that fail land in `quarantine.records`, with a `reasons` JSONB
-column holding every validation failure for that row (not just the first), each as
-`{"rule": ..., "message": ..., "severity": ...}`.
+Rows that pass the `Company` data contract (`src/lucidflow/validation/pydantic_models.py`) go on to
+imputation and quarantine-classifier scoring; rows that fail the contract, or that the trained
+quarantine classifier flags, land in `quarantine.records` with a `reasons` JSONB column holding
+every failure for that row (not just the first), each as
+`{"rule": ..., "message": ..., "severity": ...}` — contract failures carry `severity: "error"`,
+ML flags carry `severity: "warning"` plus the MLflow model version that produced the flag. Rows
+that pass both land in `clean.analytics_data`.
 
-As of Phase 2, cleaning also runs a missingness-imputation stage (see below) between structural
-cleaning and the write — its per-column strategy and benchmark scores print as part of every run.
+As of Phase 2, cleaning also runs a missingness-imputation stage between structural cleaning and
+the write — its per-column strategy and benchmark scores print as part of every run.
+
+## Running via Docker Compose
+
+`docker compose up` brings up the full stack — Postgres, MinIO (S3-compatible artifact store for
+MLflow), and an app container that runs the pipeline once against `data/intake/companies.csv` and
+exits:
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+The `app` service waits for Postgres and the MinIO bucket-creation step (`minio-init`) before
+running, then executes `python run_pipeline.py data/intake/companies.csv` inside the container —
+same entry point as running locally, just with `MLFLOW_TRACKING_URI`/`MLFLOW_ARTIFACT_ROOT` pointed
+at a container-local SQLite file and MinIO instead of the host's local `mlruns/` directory (see
+`src/lucidflow/mlflow_config.py`). Re-run the pipeline against a different file, or with
+`--check-drift`, without restarting the rest of the stack:
+
+```bash
+docker compose run app python run_pipeline.py data/intake/demo_dirty_sample.csv --check-drift
+```
+
+MinIO's web console is at `http://localhost:9001` (default credentials `minioadmin`/`minioadmin`,
+overridable in `.env`) for browsing the `lucidflow-mlflow` bucket's logged model artifacts.
 
 ## Phase 2 models
 
@@ -213,9 +264,71 @@ The trained model (`quarantine_classifier.joblib`) is committed as a durable art
 column-type classifier's. `labeled_dataset.json` is gitignored — it embeds verbatim rows from
 `companies.csv`, itself not committed; regenerate via `build_dataset.py`.
 
-**Not yet wired into `run_pipeline.py`** — the pipeline's quarantine routing today is driven
-entirely by the Pydantic contract (Phase 1), not this model. Wiring it into the write path is
-Phase 4 scope.
+**Wired into the pipeline (Phase 4, Task 3)** — rows that pass the Phase 1 Pydantic contract are
+also scored by this classifier; flagged rows are rerouted to `quarantine.records` (tagged as an ML
+flag with the MLflow model version, not a contract violation) instead of `clean.analytics_data`.
+See `quarantine_classify_task` in `src/lucidflow/flows/pipeline_flow.py`.
+
+## Phase 4: MLOps
+
+### Task 1 — MLflow tracking + model registry
+
+Every training run (`column_type_classifier/train.py`, `quarantine_classifier/train.py`, and the
+imputation selector's benchmark inside `run_missingness_engine`) logs params/metrics to MLflow —
+reusing the metrics already computed above, nothing recomputed — and registers a model-registry
+version. The imputation selector has no separate training step (it benchmarks and fits fresh on
+every real pipeline run), so it logs a tracking run unconditionally but only registers a new
+registry version when a column's winning strategy actually changes, verified against two
+consecutive identical runs (first registers v1, second leaves it at v1). Local default: a
+SQLite-backed tracking store (`mlflow.db`, gitignored — the Model Registry needs a database
+backend, not MLflow's plain file store) and a local `mlruns/` artifact directory; both overridable
+via `MLFLOW_TRACKING_URI`/`MLFLOW_ARTIFACT_ROOT` (see "Running via Docker Compose" above for the
+MinIO-backed alternative). See `src/lucidflow/mlflow_config.py`.
+
+### Task 2 — Drift monitoring
+
+`companies.csv` is one static snapshot with no timestamp column, so there's no real longitudinal
+drift to detect. `src/lucidflow/drift/` builds a reference profile from a baseline sample and
+compares PSI (categorical: `company_size`, `state` null-rate) and KS-test (numeric: `description`
+length) against three batches built from one shared incoming-data pool — unmodified, a documented
+synthetic shift at full magnitude, and the same shift at half magnitude:
+
+```bash
+python -m lucidflow.drift.build_batches
+```
+
+| batch | shift | `company_size` (PSI) | `state` null rate (PSI) | `description` length (KS) |
+|---|---|---|---|---|
+| none | — | none | none | none |
+| half | 0.5× | moderate | moderate | moderate |
+| full | 1.0× | significant | significant | significant |
+
+This demonstrates the PSI/KS wiring is correct and sensitive to the shift types it's designed to
+catch — it does **not** validate real-world drift-detection performance, since there's no real
+drift in this dataset to calibrate against. `reference_profile.json` is aggregate-only (counts and
+derived lengths, no raw text), so it's committed despite the source CSV not being.
+
+### Task 3 — Prefect orchestration + drift-triggered retrain
+
+`src/lucidflow/flows/pipeline_flow.py` converts the pipeline into a Prefect 3 flow — see "Running
+the pipeline" above. The optional `--check-drift` flag runs `drift_check_task` against a
+full-magnitude synthetic shift of the just-ingested batch (reusing Task 2's exact shift mechanism,
+so it's provably the same "significant" shift already demonstrated there) as a stand-in for a real
+incoming batch. Because that shift is always full magnitude, the check always flags — so it always
+triggers `src/lucidflow/flows/retrain_flow.py`, which reruns the imputation selector's benchmark
+and the quarantine classifier's full `train.py` (the two models whose training data the
+drift-tested columns actually feed) and logs both to MLflow. Verified end-to-end: drift flagged →
+`retrain_flow` ran as a subflow → quarantine classifier registered a genuinely new MLflow version.
+
+### Task 4 — Docker Compose stack
+
+See "Running via Docker Compose" above. `docker-compose.yml` adds `minio` (S3-compatible MLflow
+artifact store) and `app` (one-shot pipeline run) alongside the existing `postgres` service;
+`minio-init` creates the `lucidflow-mlflow` bucket before `app` starts. Verified against a true
+cold start (`docker compose down -v` to wipe all volumes, then `docker compose up -d`): all four
+services came up in dependency order, the app container ran the full pipeline and exited 0, and
+both Postgres (`clean.analytics_data`/`quarantine.records` row counts) and MinIO (logged model
+artifacts under `lucidflow-mlflow/`) were confirmed to hold real data afterward.
 
 ## Reference dataset
 
@@ -247,16 +360,19 @@ src/lucidflow/
 ├── profiling/                                                                   — Phase 2 (unused so far)
 ├── validation/                   # Pydantic data contracts                      — Phase 1
 ├── cleaning/                     # dedup, type coercion, text normalization     — Phase 1
+├── pipeline_stages.py            # shared validate/clean logic (flow + retrain) — Phase 4, Task 3
+├── mlflow_config.py              # shared MLflow tracking config                — Phase 4, Task 1
 ├── models/
 │   ├── column_type_classifier/   # semantic column-type classifier (RandomForest) — Phase 2, done
 │   ├── imputation_selector/      # learned imputation benchmark + selector       — Phase 2, done
-│   └── quarantine_classifier/    # gradient-boosted quarantine classifier — Phase 3, done (not pipeline-wired yet)
+│   └── quarantine_classifier/    # gradient-boosted quarantine classifier — Phase 3, done; pipeline-wired Phase 4
 ├── resolution/                   # entity resolution — investigated, not built (see docs/)
-├── drift/                        # PSI/KS drift monitoring                      — Phase 4
+├── drift/                        # PSI/KS drift monitoring                      — Phase 4, Task 2, done
 ├── loading/                      # dual-route Postgres writers                  — Phase 1
-├── flows/                        # Prefect orchestration                        — Phase 4
-└── observability/                                                               — Phase 4
+├── flows/                        # Prefect orchestration + drift-triggered retrain — Phase 4, Task 3, done
+└── observability/                                                               — Phase 4 (unused so far)
 dashboard/                        # Streamlit review UI                          — Phase 5
 docs/
 └── entity_resolution_investigation.md   # why the duplicate-pair classifier was dropped
+docker-compose.yml, Dockerfile      # full stack: Postgres + MinIO + app          — Phase 4, Task 4, done
 ```
