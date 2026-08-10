@@ -37,7 +37,8 @@ recomputed) and human-in-the-loop quarantine review: reviewers confirm/reject re
 quarantine records, decisions persist to Postgres, and a real retraining cycle demonstrably runs
 once enough reviews exist, with conditional model-registry promotion. See `dashboard/README.md`
 and "Phase 5" below for the full loop and a real end-to-end result (already run once: 20 real
-records reviewed, model retrained, a genuinely improved version registered).
+records reviewed, a new version registered — see "Phase 5, Task 3" below for exactly what that
+result does and doesn't prove).
 
 A fourth model — an LLM-distilled duplicate-pair classifier for entity resolution — was scoped
 for Phase 3, investigated against the real dataset, and deliberately dropped: the data doesn't
@@ -123,9 +124,11 @@ Rows that pass the `Company` data contract (`src/lucidflow/validation/pydantic_m
 imputation and quarantine-classifier scoring; rows that fail the contract, or that the trained
 quarantine classifier flags, land in `quarantine.records` with a `reasons` JSONB column holding
 every failure for that row (not just the first), each as
-`{"rule": ..., "message": ..., "severity": ...}` — contract failures carry `severity: "error"`,
-ML flags carry `severity: "warning"` plus the MLflow model version that produced the flag. Rows
-that pass both land in `clean.analytics_data`.
+`{"rule": ..., "message": ..., "severity": ...}` — contract failures carry `severity: "error"`.
+ML flags carry `severity: "warning"` plus `model_version`, and (as of Phase 5, Task 3) the exact
+`score` and `features` the classifier scored the row with, persisted at classification time so the
+dashboard's review queue shows what the model actually saw rather than a value recomputed later.
+Rows that pass both land in `clean.analytics_data`.
 
 As of Phase 2, cleaning also runs a missingness-imputation stage between structural cleaning and
 the write — its per-column strategy and benchmark scores print as part of every run.
@@ -413,15 +416,39 @@ currently registered), and separately reports a small human-reviewed eval slice 
 doesn't regress PR-AUC by more than a 0.01 tolerance — a band, not strict improvement, since a tiny
 human eval set can't reliably prove strict gains either way.
 
-Run for real once, end to end: 20 real quarantined records reviewed (1 `confirmed_bad` — a genuine
-mojibake defect, `â€"` misdecoded from an em-dash, verified via Unicode codepoint inspection, not
-just eyeballing; 19 `false_positive`, matching this project's standing expectation that real
-positives are near-zero in `companies.csv`) → retrained → candidate synthetic-test PR-AUC 0.9871
-vs. 0.9864 previously registered → registered as version 3. Independently re-confirmed against the
-MLflow run (tag `retrain_trigger=human_review`) and the `quarantine_reviews` table directly, not
-just the dashboard's own success message. Given the thin real-defect volume, this demonstrates the
-mechanism works end-to-end on real human labels — it does not demonstrate that 20 mostly-negative
-reviews meaningfully improved real-world detection; see `dashboard/README.md` for the full
+Run for real once, end to end: 20 real quarantined records reviewed. The **1 confirmed_bad / 19
+false_positive** split is not incidental — it's exactly the outcome Task 0's grounding investigation
+predicted: `companies.csv` has 0/24,473 rows that organically fail the contract, so real corruption
+is expected to be vanishingly rare, and the classifier's real-world flags are expected to be mostly
+legitimate false positives rather than genuine defects (see "Phase 3 model: quarantine classifier"
+above). This run is that prediction confirmed on real data, not just theorized: the one real
+positive was a genuine mojibake defect (`â€"`, an em-dash misdecoded through cp1252, verified via
+Unicode codepoint inspection, not eyeballing), and the other 19 were exactly the expected
+false-positive noise.
+
+The retrain comparison metric is PR-AUC (`average_precision_score`) on the fixed synthetic
+held-out test split. Candidate: **0.9871**. Previously registered (v2, same split): **0.9864**. That
+is a **+0.0007 difference** — noise, not a meaningful jump — which is exactly what you'd expect
+from folding 20 human-labeled rows into a training set of 24,473 synthetic ones (0.08% of the
+data). The retrain did register a new model version: v3 replaced v2 as the currently-served
+version, because 0.9871 clears the tolerance-band gate (candidate PR-AUC must not regress by more
+than 0.01 versus the registered model — a band designed to admit "no meaningful regression," not a
+bar requiring strict improvement). The separate, small human-reviewed eval slice (n=4, all
+false_positive rows — the single confirmed_bad row went to the human train split, not test, since
+`stratified_min1_split` can't split a class of one) reported 0.0/0.0 precision/recall; that's an
+artifact of having no positive examples in a 4-row test slice, not a claim the model performs
+poorly, and — per the design above — was never used for the registration decision. Independently
+re-confirmed against the MLflow run (`e29c88c50f99425c89c3465272fa6e15`, run param
+`retrain_trigger=human_review`) and the `quarantine_reviews` table directly, not just the
+dashboard's own success message.
+
+**What this does and doesn't prove**: it demonstrates the full loop works end-to-end on real human
+labels — review, persist, combine, evaluate on a comparable split, conditionally register — and it
+confirms Task 0's real-corruption-is-rare prediction on live data. It does **not** demonstrate a
+meaningful capability improvement from this retrain: a +0.0007 PR-AUC move from 20 mostly-negative
+labels against 24,473 synthetic rows is exactly what "no real signal added yet" looks like, and
+that is the honest, expected outcome given how little real corruption this dataset contains — not
+a shortfall in the mechanism. See `dashboard/README.md` for the full
 writeup and honest framing.
 
 ### Task 4 — Demo capture

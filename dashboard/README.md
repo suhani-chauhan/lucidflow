@@ -75,12 +75,18 @@ Registered as new version 3.
 ```
 
 Independently confirmed after the fact (not just trusting the UI): the MLflow run
-(`e29c88c50f99425c89c3465272fa6e15`, tagged `retrain_trigger=human_review`) and the
+(`e29c88c50f99425c89c3465272fa6e15`, run param `retrain_trigger=human_review`) and the
 `quarantine.quarantine_reviews` table both match exactly.
 
 **What this does and doesn't prove**: this demonstrates the full loop works -- review, persist,
-retrain, evaluate, conditionally register -- with a real (if modest) PR-AUC improvement on this
-one run. It does **not** prove the model has learned anything robust from human labels yet: with
+retrain, evaluate, conditionally register. The PR-AUC move (0.9864 -> 0.9871, +0.0007) is real but
+is noise, not a meaningful improvement -- exactly what's expected from folding 20 human-labeled
+rows into a 24,473-row synthetic training set (0.08% of it). v3 registered because it cleared the
+tolerance-band gate (no more than 0.01 regression), not because it beat v2 by any margin worth
+calling a win. The 1 confirmed_bad / 19 false_positive split itself is the more meaningful result
+here: it's Task 0's grounding investigation (0/24,473 real rows fail the contract, so organic
+corruption is expected to be near-zero) confirmed directly on live review data, not just a table
+entry. It does **not** prove the model has learned anything robust from human labels yet: with
 only 1 confirmed-bad example, the human-reviewed eval's 0.0000/0.0000 reflects an all-negative
 4-row test slice (no positive class to recall), not a meaningful precision/recall estimate --
 that number should be read as "not enough data yet," not "the model is bad at this." Real signal
