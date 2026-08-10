@@ -26,6 +26,12 @@ mlflow.db
 # like the column-type classifier, so not worth version-controlling.
 src/lucidflow/models/imputation_selector/*.joblib
 
+# Auto-generated Pydantic contracts (contract_generation) are regenerated
+# fresh from whatever CSV is pointed at them, and can embed real observed
+# values from uncommitted source data (e.g. companies.csv) as comments — not
+# durable artifacts, same reasoning as the imputation selector above.
+src/lucidflow/contract_generation/generated/
+
 # Contains verbatim rows (names, descriptions, addresses) from companies.csv,
 # which itself isn't committed — regenerate via build_dataset.py.
 src/lucidflow/models/quarantine_classifier/labeled_dataset.json

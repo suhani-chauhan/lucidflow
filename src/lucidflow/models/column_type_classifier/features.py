@@ -24,6 +24,12 @@ _DATE_RE = re.compile(
 )
 _NUMERIC_RE = re.compile(r"^-?\d+(\.\d+)?$")
 
+# Public alias: the permissive bare-domain-inclusive URL pattern this module already
+# uses for the url_hit_rate feature, re-exported so downstream consumers (e.g.
+# contract_generation) can reuse the exact same regex as a Pydantic field pattern
+# instead of writing a second, possibly-stricter one.
+URL_PATTERN = _URL_RE.pattern
+
 FEATURE_NAMES = [
     "null_ratio",
     "cardinality_ratio",
