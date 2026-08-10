@@ -29,7 +29,7 @@ without the generator silently "fixing" the model's output.
 | geographic              | `Optional[str]`, unconstrained (real geographic data is genuinely mixed-format -- same reasoning as the `state` column's mode-within-country fallback in the imputation selector, not a strict format) |
 | date                   | `date` if observed values parse cleanly as ISO 8601, else `Optional[str]` (date-shaped-but-not-ISO and non-date-shaped both fall back the same way -- the two cases get different risk-flag wording in `build_field_spec`, so the report can tell them apart) |
 | url                    | `Optional[str]`, permissive pattern -- reuses `features.URL_PATTERN` verbatim, the same bare-domain-inclusive regex from the Phase 2 fix, so the generated contract isn't stricter than what Model 1 itself was scored against |
-| boolean                | `Optional[bool]` -- **flagged every time**: Model 1's only boolean training examples are 0/1-coded, so it has never learned text true/false, and a `boolean` prediction on a text column should be treated with more suspicion than the other types |
+| boolean                | `Optional[bool]` if every observed value is one Pydantic actually coerces to bool, else `Optional[str]` -- **flagged every time regardless**: Model 1's only boolean training examples are 0/1-coded, so it has never learned text true/false, and a `boolean` prediction on a text column should be treated with more suspicion than the other types. (The str fallback was added after Task 2 testing showed `bool` is not a soft type the way the others are -- a wrong prediction hard-rejects every row whose value isn't in Pydantic's fixed coercion set, instead of just being "worth a second look".) |
 | numeric_continuous     | `Optional[float]`; observed min/max noted as a comment (soft reference), not a hard `ge`/`le` validation failure |
 
 `required=True` is only ever assigned to `identifier` fields, per the mapping
@@ -124,6 +124,15 @@ def _looks_like_boolean_text(values: list[str]) -> bool:
         return False
     distinct_lower = {v.lower() for v in set(values)}
     return any(distinct_lower <= pair for pair in _TRUE_FALSE_TEXT_SETS)
+
+
+# Pydantic v2's exact string-to-bool coercion set (verified empirically, not from docs --
+# see the Task 2 companies.csv report for how this was found to matter in practice).
+_PYDANTIC_BOOL_STRINGS = {"0", "1", "true", "false", "yes", "no", "y", "n", "t", "f", "on", "off"}
+
+
+def _all_pydantic_bool_parseable(values: list[str]) -> bool:
+    return all(v.lower() in _PYDANTIC_BOOL_STRINGS for v in values)
 
 
 def _parses_as_iso_date(v: str) -> bool:
@@ -282,9 +291,26 @@ def build_field_spec(
             "(and double-check nearby 'categorical' columns for a possible miss, see the "
             "categorical branch above)"
         )
-        spec = FieldSpec(
-            column=column, predicted_type=predicted_type, confidence=confidence, python_type="bool", required=False
-        )
+        # Unlike the other soft-fallback types, `bool` is not actually soft: Pydantic only
+        # coerces a fixed string set (see _PYDANTIC_BOOL_STRINGS), so a wrong "boolean"
+        # prediction doesn't just look questionable -- it hard-fails validation on every row
+        # whose real value isn't in that set (discovered exactly this way, scoring the
+        # generated companies.csv contract against real rows: company_size predicted
+        # boolean at 0.48 confidence, rejecting ~71% of rows outright). Same fallback
+        # discipline as `date` above: verify before committing to the strict type.
+        if non_null and not _all_pydantic_bool_parseable(non_null):
+            risk_flags.append(
+                "observed values are NOT all Pydantic-bool-parseable (only "
+                f"{sorted(_PYDANTIC_BOOL_STRINGS)} coerce) -- kept as Optional[str] instead of "
+                "Optional[bool] so this field doesn't hard-reject real rows"
+            )
+            spec = FieldSpec(
+                column=column, predicted_type=predicted_type, confidence=confidence, python_type="str", required=False
+            )
+        else:
+            spec = FieldSpec(
+                column=column, predicted_type=predicted_type, confidence=confidence, python_type="bool", required=False
+            )
 
     else:  # numeric_continuous
         floats = []

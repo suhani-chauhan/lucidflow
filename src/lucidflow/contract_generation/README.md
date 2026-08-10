@@ -43,8 +43,18 @@ Model 1's real 8-class label set: `identifier`, `categorical`, `free_text`, `geo
 | `geographic` | `Optional[str]`, unconstrained (mixed-format data, same reasoning as `state`) |
 | `date` | `date` if observed values parse as ISO 8601, else `Optional[str]` |
 | `url` | `Optional[str]`, permissive pattern reused verbatim from `features.URL_PATTERN` |
-| `boolean` | `Optional[bool]` — always flagged: Model 1's boolean examples are all 0/1-coded, never text |
+| `boolean` | `Optional[bool]` if every observed value is actually Pydantic-bool-parseable, else `Optional[str]` — always flagged either way: Model 1's boolean examples are all 0/1-coded, never text |
 | `numeric_continuous` | `Optional[float]`, observed min/max noted as a soft comment, not enforced |
+
+The `boolean` fallback above was added *after* Task 2 testing against real
+`companies.csv` data: `company_size` predicted `boolean` at low confidence, and
+`Optional[bool]` hard-rejected 71% of real rows (Pydantic only coerces a fixed string
+set to bool). Unlike the other types, a wrong `boolean` prediction isn't just
+"questionable," it actively breaks validation — see
+`reports/companies_csv_comparison.md` for the full story, including a known remaining
+gap (the ordinal-candidate advisory only checks `categorical` predictions, not
+`boolean` ones, so `company_size` doesn't get flagged as a possible ordinal code in
+this run).
 
 **No `numeric_ordinal_code` type.** `company_size` was originally proposed with that
 label during Phase 2's labeling step, but the label a human actually confirmed —

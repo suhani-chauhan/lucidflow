@@ -161,10 +161,30 @@ def test_url_uses_permissive_pattern_from_features_module():
     assert spec.constraints["pattern"] == URL_PATTERN
 
 
-def test_boolean_always_carries_a_risk_flag():
+def test_boolean_with_coercible_values_stays_bool_type():
     spec = build_field_spec("is_active", "boolean", 0.95, ["0", "1", "0"])
     assert spec.python_type == "bool"
     assert any("0/1-coded" in flag for flag in spec.risk_flags)
+
+
+def test_boolean_always_carries_the_blind_spot_risk_flag_even_when_kept_as_bool():
+    spec = build_field_spec("is_active", "boolean", 0.95, ["0", "1", "0"])
+    assert any("0/1-coded" in flag for flag in spec.risk_flags)
+
+
+def test_boolean_with_non_coercible_values_falls_back_to_str():
+    # Real case found in Task 2: company_size (values "1".."7") predicted boolean at low
+    # confidence. Pydantic's bool coercion only accepts a fixed string set, so committing
+    # to Optional[bool] here would hard-reject the majority of real rows.
+    spec = build_field_spec("company_size", "boolean", 0.48, ["1", "2", "3", "4", "5", "6", "7"])
+    assert spec.python_type == "str"
+    assert any("NOT all Pydantic-bool-parseable" in flag for flag in spec.risk_flags)
+    assert any("0/1-coded" in flag for flag in spec.risk_flags)  # blind-spot note still present
+
+
+def test_boolean_with_no_non_null_values_stays_bool_type():
+    spec = build_field_spec("is_active", "boolean", 0.95, [None, None])
+    assert spec.python_type == "bool"
 
 
 def test_numeric_continuous_reports_observed_range_as_soft_comment():
