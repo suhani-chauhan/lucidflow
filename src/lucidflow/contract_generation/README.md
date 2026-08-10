@@ -50,11 +50,14 @@ The `boolean` fallback above was added *after* Task 2 testing against real
 `companies.csv` data: `company_size` predicted `boolean` at low confidence, and
 `Optional[bool]` hard-rejected 71% of real rows (Pydantic only coerces a fixed string
 set to bool). Unlike the other types, a wrong `boolean` prediction isn't just
-"questionable," it actively breaks validation — see
-`reports/companies_csv_comparison.md` for the full story, including a known remaining
-gap (the ordinal-candidate advisory only checks `categorical` predictions, not
-`boolean` ones, so `company_size` doesn't get flagged as a possible ordinal code in
-this run).
+"questionable," it actively breaks validation — see `reports/companies_csv_comparison.md`
+for the full story. A second, more general fix followed: a `boolean` prediction with
+more than 2 distinct non-null values is a direct contradiction of what "boolean" means
+(not just low confidence), so `build_field_spec` now auto-downgrades that case to
+categorical treatment *before* the ordinal-candidate check runs — so `company_size`
+(7 distinct integer codes) now correctly gets flagged as a possible ordinal code, the
+same as it would if Model 1 had predicted `categorical` directly. Model 1's raw
+prediction is still preserved and shown in the generated comment either way.
 
 **No `numeric_ordinal_code` type.** `company_size` was originally proposed with that
 label during Phase 2's labeling step, but the label a human actually confirmed —

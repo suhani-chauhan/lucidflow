@@ -21,6 +21,18 @@ as a possible mislabeled boolean (see
 tests/test_column_type_classifier_model.py::test_true_false_text_boolean_column_is_misclassified_as_categorical),
 without the generator silently "fixing" the model's output.
 
+A `categorical` prediction is the common path into that ordinal advisory, but
+not the only one: a `boolean` prediction with more than 2 distinct non-null
+values is a direct contradiction of what "boolean" means, not just a
+low-confidence guess (booleans have at most 2 states). `build_field_spec`
+catches this before dispatching -- auto-downgrades the field-shape logic to
+categorical treatment (the raw Model 1 prediction is still preserved on the
+`FieldSpec` and still shown in the generated comment) -- so a case like
+company_size (predicted `boolean` at low confidence, 7 distinct integer
+codes) gets the same ordinal-candidate advisory a direct `categorical`
+prediction would, instead of silently missing it. Found on real data in Task
+2 -- see `reports/companies_csv_comparison.md`.
+
 | Model 1 type         | Field template                                              |
 |-----------------------|--------------------------------------------------------------|
 | identifier             | required; `int` if all observed values parse as integers, else `str` |
@@ -177,7 +189,26 @@ def build_field_spec(
     risk_flags = _low_confidence_flag(confidence)
     comments: list[str] = []
 
-    if predicted_type == "identifier":
+    # Type-consistency check, run before the ordinal/boolean-text advisories: a `boolean`
+    # column can have at most 2 distinct non-null values by definition, so more than that is
+    # a direct contradiction of the prediction itself, not just a low-confidence guess. Found
+    # via company_size (predicted boolean, 7 distinct values 1-7) -- auto-downgrading to
+    # categorical here, generally, means the small-dense-integer ordinal advisory below gets a
+    # chance to fire on cases like it instead of only ever running when Model 1 says
+    # "categorical" directly. `predicted_type` (Model 1's actual, raw output) is preserved on
+    # the FieldSpec either way -- this only changes which field-shape branch runs.
+    effective_type = predicted_type
+    if predicted_type == "boolean":
+        distinct_non_null = set(non_null)
+        if len(distinct_non_null) > 2:
+            risk_flags.append(
+                f"Model 1 predicted boolean, but {len(distinct_non_null)} distinct non-null values "
+                "is a definitional contradiction (boolean allows at most 2) -- auto-downgraded to "
+                "categorical treatment below"
+            )
+            effective_type = "categorical"
+
+    if effective_type == "identifier":
         is_int = _looks_all_int(non_null)
         spec = FieldSpec(
             column=column,
@@ -191,7 +222,7 @@ def build_field_spec(
                 f"required field but {null_count} observed null(s) -- validation will reject those rows as-is"
             )
 
-    elif predicted_type == "categorical":
+    elif effective_type == "categorical":
         distinct = sorted(set(non_null))
         if distinct:
             if len(distinct) <= _MAX_LISTED_CATEGORIES:
@@ -219,12 +250,12 @@ def build_field_spec(
             comments=comments,
         )
 
-    elif predicted_type == "free_text":
+    elif effective_type == "free_text":
         spec = FieldSpec(
             column=column, predicted_type=predicted_type, confidence=confidence, python_type="str", required=False
         )
 
-    elif predicted_type == "geographic":
+    elif effective_type == "geographic":
         spec = FieldSpec(
             column=column,
             predicted_type=predicted_type,
@@ -239,7 +270,7 @@ def build_field_spec(
             ],
         )
 
-    elif predicted_type == "date":
+    elif effective_type == "date":
         if non_null:
             iso_rate = sum(_parses_as_iso_date(v) for v in non_null) / len(non_null)
             us_rate = sum(bool(_US_DATE_RE.match(v)) for v in non_null) / len(non_null)
@@ -273,7 +304,7 @@ def build_field_spec(
                     "8601 dates -- kept as Optional[str], treat this prediction with suspicion"
                 )
 
-    elif predicted_type == "url":
+    elif effective_type == "url":
         spec = FieldSpec(
             column=column,
             predicted_type=predicted_type,
@@ -284,7 +315,7 @@ def build_field_spec(
             comments=["Pattern reused verbatim from features.URL_PATTERN (Phase 2's bare-domain fix)."],
         )
 
-    elif predicted_type == "boolean":
+    elif effective_type == "boolean":
         risk_flags.append(
             "Model 1's only boolean training examples are 0/1-coded -- it has never learned text "
             "true/false, so treat this prediction with more suspicion than the other types "

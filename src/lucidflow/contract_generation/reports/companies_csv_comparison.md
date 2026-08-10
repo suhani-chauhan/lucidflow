@@ -55,20 +55,33 @@ too wrong to be useful" failure mode Task 2 asks to watch for, and it would have
 easy to miss without actually validating rows instead of just eyeballing the generated
 source.
 
-Fixed in `type_mapping.py`: a `boolean` prediction now checks whether *all* observed
-values are actually Pydantic-bool-parseable before committing to `Optional[bool]`;
-otherwise it falls back to `Optional[str]` (same fallback discipline `date` already
-had), and keeps every risk-flag comment regardless. After the fix, `company_size`
-generates as `str | None` with three stacked RISK comments (low confidence, the
-boolean blind spot, and the failed-parseability check) and the file validates clean.
+Fixed in `type_mapping.py`, in two passes:
 
-It still doesn't recover `ge=1, le=7` — Model 1 has no ordinal concept, and the
-`_looks_like_ordinal_candidate` advisory heuristic only fires on `categorical`
-predictions, not `boolean` ones, so it never got a chance to flag "possible ordinal
-code" here either. **Known gap, not fixed**: the ordinal-candidate check should
-probably also run in the boolean branch, since this run shows the same small-dense-
-integer shape can land as either type. Flagging this rather than quietly patching it
-in — happy to extend it if wanted.
+1. A `boolean` prediction now checks whether *all* observed values are actually
+   Pydantic-bool-parseable before committing to `Optional[bool]`; otherwise it falls
+   back to `Optional[str]` (same fallback discipline `date` already had), keeping
+   every risk-flag comment regardless. This alone got `company_size` validating
+   clean, but still lost the ordinal signal: the `_looks_like_ordinal_candidate`
+   advisory only ran on `categorical` predictions, and Model 1 said `boolean` here,
+   not `categorical` — so "possible ordinal code" never got a chance to fire.
+2. A general type-consistency check, run before the ordinal advisory: a `boolean`
+   prediction with more than 2 distinct non-null values is a direct contradiction of
+   what "boolean" means (not just low confidence — a boolean has at most 2 states by
+   definition), so it now auto-downgrades to categorical field-shape treatment.
+   Model 1's raw prediction (`boolean`, 0.48) is still preserved and shown in the
+   generated comment; only which field-shape branch runs changes. This isn't
+   specific to `company_size` — any future boolean-predicted column with >2 distinct
+   values gets the same treatment, and the ordinal-candidate check now gets a fair
+   chance to run on it.
+
+After both fixes, `company_size` generates as `str | None` with the observed value
+list (`['1', ..., '7']`), a low-confidence flag, the boolean-blind-spot note, the
+definitional-contradiction note, and — now — the possible-ordinal-code advisory too.
+The file still validates all 24,473 rows clean. It still doesn't recover `ge=1, le=7`
+automatically (Model 1 has no ordinal concept, and asserting an order the data can't
+prove was never the goal) — but a human reading the generated file now gets exactly
+the signal that would lead them to add it by hand, same as the original `company_size`
+decision was actually made.
 
 ### `state` / `country` — the sentinel validator gap
 

@@ -172,13 +172,39 @@ def test_boolean_always_carries_the_blind_spot_risk_flag_even_when_kept_as_bool(
     assert any("0/1-coded" in flag for flag in spec.risk_flags)
 
 
-def test_boolean_with_non_coercible_values_falls_back_to_str():
-    # Real case found in Task 2: company_size (values "1".."7") predicted boolean at low
-    # confidence. Pydantic's bool coercion only accepts a fixed string set, so committing
-    # to Optional[bool] here would hard-reject the majority of real rows.
-    spec = build_field_spec("company_size", "boolean", 0.48, ["1", "2", "3", "4", "5", "6", "7"])
+def test_boolean_with_two_distinct_non_coercible_values_falls_back_to_str():
+    # 2 distinct values doesn't trip the definitional-contradiction downgrade, but they
+    # still aren't Pydantic-bool-parseable, so the boolean branch's own fallback must fire.
+    spec = build_field_spec("weird_flag", "boolean", 0.7, ["2", "5", "2", "5"])
     assert spec.python_type == "str"
     assert any("NOT all Pydantic-bool-parseable" in flag for flag in spec.risk_flags)
+
+
+def test_boolean_prediction_with_more_than_two_distinct_values_downgrades_to_categorical():
+    # Real case found in Task 2: company_size (values "1".."7") predicted boolean at low
+    # confidence -- a definitional contradiction (boolean allows at most 2 distinct values),
+    # not just a low-confidence guess.
+    spec = build_field_spec("company_size", "boolean", 0.48, ["1", "2", "3", "4", "5", "6", "7"])
+    assert spec.python_type == "str"
+    assert any("definitional contradiction" in flag for flag in spec.risk_flags)
+    # Model 1's actual raw prediction is preserved for transparency, even though the field
+    # was generated using categorical treatment.
+    assert spec.predicted_type == "boolean"
+
+
+def test_boolean_downgrade_lets_ordinal_advisory_fire():
+    # The whole point of running the downgrade before the ordinal check: company_size-shaped
+    # data (small, dense integer codes) predicted as boolean should still get flagged as a
+    # possible ordinal code, exactly as it would if Model 1 had said "categorical" directly.
+    values = [str(i) for i in range(1, 8)] * 5
+    spec = build_field_spec("company_size", "boolean", 0.48, values)
+    assert any("possible ordinal-coded numeric" in flag for flag in spec.risk_flags)
+
+
+def test_boolean_prediction_with_exactly_two_distinct_values_does_not_downgrade():
+    spec = build_field_spec("is_active", "boolean", 0.95, ["0", "1", "0"])
+    assert spec.python_type == "bool"
+    assert not any("definitional contradiction" in flag for flag in spec.risk_flags)
     assert any("0/1-coded" in flag for flag in spec.risk_flags)  # blind-spot note still present
 
 
