@@ -1,7 +1,7 @@
 [project]
 name = "lucidflow"
 version = "0.1.0"
-description = "ML-driven data quality platform — Phases 1-4 done (ETL spine, three trained models, MLOps layer); Phase 5 dashboard in progress"
+description = "ML-driven data quality platform — Phases 1-5 done (ETL spine, three trained models, MLOps layer, dashboard with human-in-the-loop review)"
 requires-python = ">=3.11"
 dependencies = [
     "polars>=1.0",

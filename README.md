@@ -7,7 +7,7 @@ in a production ETL pipeline: a semantic column-type classifier, a learned imput
 and a quarantine classifier for corrupt-record detection — orchestrated with Prefect, tracked
 with MLflow, and served through a Streamlit review dashboard.
 
-**This repository has completed Phases 1-4.** Phase 1 built the ETL
+**This repository has completed Phases 1-5.** Phase 1 built the ETL
 skeleton (`ingestion -> validation -> cleaning -> routing`) backed by real Postgres schemas.
 Phase 2 added the first two of LucidFlow's trained models — a semantic column-type classifier and
 a learned imputation selector — both trained on the real
@@ -30,19 +30,28 @@ Phase 4 (MLOps) wraps the pipeline and all three models in production tooling:
 - **Task 4 (done)** — `docker compose up` brings up the full stack (Postgres, MinIO as MLflow's
   S3-compatible artifact store, and an app container that runs the pipeline once end-to-end).
 
-Phase 5 is in progress: CI (Task 1, done), a read-only Streamlit observability dashboard
-(Task 2, done — pipeline run summary, model results, drift status, and the entity-resolution
-investigation, all reading existing MLflow/Postgres/drift outputs), and human-in-the-loop
-quarantine review (Task 3, done — reviewers confirm/reject real ML-flagged quarantine records,
-decisions persist to Postgres, and a real retraining cycle demonstrably runs once enough
-reviews exist, with conditional model-registry promotion). See `dashboard/README.md` for the
-full Task 3 loop and a real end-to-end result. A demo capture (Task 4) and a final consistency
-pass (Task 5) are next.
+**Phase 5 is done.** GitHub Actions CI runs ruff + pytest on every push (badge above). A
+Streamlit dashboard adds observability (pipeline run summary, model results, drift status, the
+entity-resolution investigation — all reading existing MLflow/Postgres/drift outputs, nothing
+recomputed) and human-in-the-loop quarantine review: reviewers confirm/reject real ML-flagged
+quarantine records, decisions persist to Postgres, and a real retraining cycle demonstrably runs
+once enough reviews exist, with conditional model-registry promotion. See `dashboard/README.md`
+and "Phase 5" below for the full loop and a real end-to-end result (already run once: 20 real
+records reviewed, model retrained, a genuinely improved version registered).
 
 A fourth model — an LLM-distilled duplicate-pair classifier for entity resolution — was scoped
 for Phase 3, investigated against the real dataset, and deliberately dropped: the data doesn't
 support it (see [`docs/entity_resolution_investigation.md`](docs/entity_resolution_investigation.md)
 for the full investigation with real examples and counts).
+
+## Demo
+
+![LucidFlow dashboard demo](docs/assets/dashboard-demo.gif)
+
+Captured live against the running stack, not staged: the four observability pages, then the
+Quarantine Review flow — a real flagged record, a live decision click, the reviewed-count
+incrementing, and the Retrain section showing the actual model version registered from Task 3's
+real retrain run. See "Phase 5, Task 3" below for the full numbers behind that run.
 
 ## Requirements
 
@@ -145,6 +154,22 @@ docker compose run app python run_pipeline.py data/intake/demo_dirty_sample.csv 
 
 MinIO's web console is at `http://localhost:9001` (default credentials `minioadmin`/`minioadmin`,
 overridable in `.env`) for browsing the `lucidflow-mlflow` bucket's logged model artifacts.
+
+## Running the dashboard
+
+Needs Postgres up (`docker compose up -d postgres`) and at least one real pipeline run so there's
+something to show:
+
+```bash
+set -a; source .env; set +a
+streamlit run dashboard/app.py
+```
+
+Four pages: Pipeline Summary (landing page), Model Results, Drift Status, Entity Resolution — all
+read-only, reading existing Postgres/MLflow/drift outputs, nothing recomputed — plus Quarantine
+Review, the human-in-the-loop loop that gives the quarantine classifier real-world labels and can
+trigger a real retrain. See `dashboard/README.md` for what each page shows and the full Task 3
+loop, or "Phase 5" below for the summary.
 
 ## Phase 2 models
 
@@ -277,6 +302,13 @@ also scored by this classifier; flagged rows are rerouted to `quarantine.records
 flag with the MLflow model version, not a contract violation) instead of `clean.analytics_data`.
 See `quarantine_classify_task` in `src/lucidflow/flows/pipeline_flow.py`.
 
+The results above are this model's original build and validation on synthetic data alone. It has
+since been retrained at least once with real human-reviewed labels (Phase 5, Task 3) and a newer
+version is now registered — the numbers above are not live-updated to match, by design (that would
+mean hand-editing this table after every demo retrain). For whatever's actually registered right
+now, check the dashboard's Model Results page or query MLflow directly; see "Phase 5, Task 3"
+below for the specific real retrain run this project has already completed.
+
 ## Phase 4: MLOps
 
 ### Task 1 — MLflow tracking + model registry
@@ -338,6 +370,71 @@ services came up in dependency order, the app container ran the full pipeline an
 both Postgres (`clean.analytics_data`/`quarantine.records` row counts) and MinIO (logged model
 artifacts under `lucidflow-mlflow/`) were confirmed to hold real data afterward.
 
+## Phase 5: Dashboard + human-in-the-loop review
+
+### Task 1 — GitHub Actions CI
+
+`.github/workflows/ci.yml` runs `ruff check .` and `pytest` on every push and pull request to
+`master` (checkout, Python 3.11 setup, `pip install -e ".[dev]"`). No services are spun up — no
+test touches Postgres or the gitignored real dataset. See the badge at the top of this README;
+verified green on a real push via the Actions API, not just locally.
+
+### Task 2 — Observability dashboard
+
+`dashboard/app.py` plus three pages under `dashboard/pages/` (`Model_Results`, `Drift_Status`,
+`Entity_Resolution`) are a read-only reporting layer over what Phases 1-4 already produce: latest
+pipeline run summary and quarantine reasons from Postgres, the three trained models' logged
+metrics from MLflow (including the quarantine classifier's confusion matrix and the imputation
+selector's per-column benchmark table), the Phase 4 Task 2 drift batches' PSI/KS results, and the
+entity-resolution investigation doc rendered verbatim. No new backend logic beyond reading and
+formatting what already exists, except `last_check_results.json` (`src/lucidflow/drift/`), a new
+committed aggregate-only artifact so the drift page has something to read without rerunning
+`build_batches.py` first. Run it with `streamlit run dashboard/app.py` — see "Running the
+dashboard" above and `dashboard/README.md` for the full page-by-page breakdown.
+
+### Task 3 — Human-in-the-loop quarantine review
+
+The real new feature of this phase. `dashboard/pages/4_Quarantine_Review.py` queues real
+quarantined records (not synthetic) one at a time — anomaly score, flagged reason, and the full
+feature vector the model actually scored, persisted at classification time in
+`quarantine_classify_task` (`src/lucidflow/flows/pipeline_flow.py`) rather than recomputed at
+review time. Reviewers mark each record "confirmed bad" or "false positive"; decisions persist to
+a new `quarantine.quarantine_reviews` table (`UNIQUE(record_id)`, so a record can only be reviewed
+once — no re-review, no ties to resolve by design).
+
+At 20 total reviewed decisions (`MIN_REVIEWS_FOR_RETRAIN` in `dashboard/data_access.py`, no
+per-class minimum), a "Retrain model" action becomes available. `retrain_with_reviews.py`
+(`src/lucidflow/models/quarantine_classifier/`) combines the human-reviewed rows (with an explicit
+`label` field, decoupled from `is_synthetic` — provenance and ground truth are never conflated)
+with the existing synthetic training set, evaluates the candidate on the exact same fixed
+synthetic held-out split `train.py` uses (for a directly comparable PR-AUC against whatever's
+currently registered), and separately reports a small human-reviewed eval slice that is explicitly
+**not** used for the registration decision given its size. The candidate is registered only if it
+doesn't regress PR-AUC by more than a 0.01 tolerance — a band, not strict improvement, since a tiny
+human eval set can't reliably prove strict gains either way.
+
+Run for real once, end to end: 20 real quarantined records reviewed (1 `confirmed_bad` — a genuine
+mojibake defect, `â€"` misdecoded from an em-dash, verified via Unicode codepoint inspection, not
+just eyeballing; 19 `false_positive`, matching this project's standing expectation that real
+positives are near-zero in `companies.csv`) → retrained → candidate synthetic-test PR-AUC 0.9871
+vs. 0.9864 previously registered → registered as version 3. Independently re-confirmed against the
+MLflow run (tag `retrain_trigger=human_review`) and the `quarantine_reviews` table directly, not
+just the dashboard's own success message. Given the thin real-defect volume, this demonstrates the
+mechanism works end-to-end on real human labels — it does not demonstrate that 20 mostly-negative
+reviews meaningfully improved real-world detection; see `dashboard/README.md` for the full
+writeup and honest framing.
+
+### Task 4 — Demo capture
+
+`docs/assets/dashboard-demo.gif` (see "Demo" above) walks through all four observability pages
+plus a live review decision, captured from a running dashboard rather than staged.
+
+### Task 5 — Final README pass
+
+This section and the surrounding consistency pass (Demo/Running-the-dashboard sections, project
+layout tree, status line above) — making sure the README matches what Phases 1-5 actually built,
+not what was originally planned for them.
+
 ## Reference dataset
 
 The Phase 1 contract (`Company`) is hand-written against the `companies.csv` table from the
@@ -379,8 +476,11 @@ src/lucidflow/
 ├── loading/                      # dual-route Postgres writers                  — Phase 1
 ├── flows/                        # Prefect orchestration + drift-triggered retrain — Phase 4, Task 3, done
 └── observability/                                                               — Phase 4 (unused so far)
-dashboard/                        # Streamlit review UI                          — Phase 5
+dashboard/                        # Streamlit app: observability (4 pages) +      — Phase 5, done
+                                   # human-in-the-loop quarantine review (5th page)
 docs/
-└── entity_resolution_investigation.md   # why the duplicate-pair classifier was dropped
+├── entity_resolution_investigation.md   # why the duplicate-pair classifier was dropped
+└── assets/dashboard-demo.gif            # dashboard + review flow walkthrough    — Phase 5, Task 4
+.github/workflows/ci.yml            # ruff + pytest on every push/PR              — Phase 5, Task 1, done
 docker-compose.yml, Dockerfile      # full stack: Postgres + MinIO + app          — Phase 4, Task 4, done
 ```
